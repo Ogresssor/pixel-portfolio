@@ -122,39 +122,49 @@
 }
 
 /* ── virtual joystick ── */
-.pw-joystick-area {
+
+/* обёртка — вся нижняя половина экрана, только на тач */
+.pw-joystick-wrap {
   position: absolute;
-  bottom: 24px;
-  left: 24px;
+  inset: 0;                /* весь canvas */
   z-index: 20;
-  /* show only on touch screens */
   display: none;
 }
 
 @media (hover: none) and (pointer: coarse) {
-  .pw-joystick-area { display: block; }
+  .pw-joystick-wrap { display: block; }
 }
 
-.joystick-base {
-  width: 110px;
-  height: 110px;
-  border-radius: 50%;
-  border: 2px solid var(--primary);
-  background: rgba(0, 170, 255, 0.08);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+/* прозрачная зона касания на всю высоту */
+.joystick-area {
+  position: absolute;
+  inset: 0;
   touch-action: none;
   user-select: none;
 }
 
-.joystick-knob {
-  width: 44px;
-  height: 44px;
+/* база — скрыта, появляется где ткнул */
+.joystick-base {
+  position: absolute;
+  width: 96px;
+  height: 96px;
   border-radius: 50%;
-  background: var(--primary);
-  opacity: 0.85;
+  border: 1px solid rgba(0, 170, 255, 0.35);
+  background: rgba(0, 170, 255, 0.06);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.12s ease;
   pointer-events: none;
-  transition: transform 0.05s linear;
-  box-shadow: 0 0 12px var(--primary);
+}
+
+.joystick-knob {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: rgba(0, 204, 255, 0.55);
+  border: 1px solid rgba(0, 204, 255, 0.7);
+  pointer-events: none;
+  box-shadow: 0 0 10px rgba(0, 204, 255, 0.4);
 }

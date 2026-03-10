@@ -14,25 +14,20 @@ function makeVoxelSpaceship() {
   const wing    = new THREE.MeshBasicMaterial({ color: 0x003366 });
   const cockpit = new THREE.MeshBasicMaterial({ color: 0xaaeeff });
 
-  // main body — flat & wide
   group.add(new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.22, 0.52), hull));
 
-  // raised spine
   const spine = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.16, 0.28), accent);
   spine.position.set(0.1, 0.19, 0);
   group.add(spine);
 
-  // cockpit bubble
   const cpkt = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.2, 0.28), cockpit);
   cpkt.position.set(0.7, 0.28, 0);
   group.add(cpkt);
 
-  // nose tip
   const nose = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.14, 0.22), accent);
   nose.position.set(1.06, 0, 0);
   group.add(nose);
 
-  // swept delta wings
   [-1, 1].forEach((side) => {
     const w1 = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.06, 0.55), wing);
     w1.position.set(0.1, -0.02, side * 0.52);
@@ -126,70 +121,76 @@ function makeStars(count = 1200) {
   return new THREE.Points(geo, new THREE.PointsMaterial({ color: 0x2255aa, size: 0.18 }));
 }
 
-// ─── virtual joystick ────────────────────────────────────────────────────────
+// ─── floating virtual joystick ───────────────────────────────────────────────
+// Невидимая зона — при тапе появляется там, где ткнул
 
 function Joystick({ onChange }) {
-  const baseRef  = useRef(null);
-  const knobRef  = useRef(null);
-  const stateRef = useRef({ active: false, id: null, cx: 0, cy: 0 });
+  const areaRef  = useRef(null);
+  const baseEl   = useRef(null);
+  const knobEl   = useRef(null);
+  const stateRef = useRef({ active: false, id: null, ox: 0, oy: 0 });
+  const RADIUS   = 48; // px, половина базы
 
-  const update = useCallback((tx, ty) => {
+  const move = useCallback((tx, ty) => {
     const s = stateRef.current;
-    const base = baseRef.current;
-    if (!base) return;
-    const r = base.offsetWidth / 2;
-    const dx = Math.max(-r, Math.min(r, tx - s.cx));
-    const dy = Math.max(-r, Math.min(r, ty - s.cy));
-    const dist = Math.hypot(dx, dy);
-    const clamp = Math.min(dist, r);
+    const dx = tx - s.ox;
+    const dy = ty - s.oy;
+    const dist  = Math.hypot(dx, dy);
+    const clamp = Math.min(dist, RADIUS);
     const angle = Math.atan2(dy, dx);
-    const kx = Math.cos(angle) * clamp;
-    const ky = Math.sin(angle) * clamp;
+    const kx    = Math.cos(angle) * clamp;
+    const ky    = Math.sin(angle) * clamp;
 
-    if (knobRef.current) {
-      knobRef.current.style.transform = `translate(${kx}px, ${ky}px)`;
-    }
-    onChange(kx / r, ky / r);
+    knobEl.current.style.transform = `translate(${kx}px, ${ky}px)`;
+    onChange(kx / RADIUS, ky / RADIUS);
   }, [onChange]);
 
   const onTouchStart = useCallback((e) => {
     e.preventDefault();
-    const t = e.changedTouches[0];
-    const base = baseRef.current;
-    const rect = base.getBoundingClientRect();
-    stateRef.current = {
-      active: true,
-      id: t.identifier,
-      cx: rect.left + rect.width / 2,
-      cy: rect.top  + rect.height / 2,
-    };
-    update(t.clientX, t.clientY);
-  }, [update]);
+    if (stateRef.current.active) return;
+    const touch = e.changedTouches[0];
+    const area  = areaRef.current.getBoundingClientRect();
+
+    // origin = точка касания относительно области
+    const ox = touch.clientX - area.left;
+    const oy = touch.clientY - area.top;
+    stateRef.current = { active: true, id: touch.identifier, ox: touch.clientX, oy: touch.clientY };
+
+    // показываем базу там где ткнули
+    baseEl.current.style.left    = `${ox - RADIUS}px`;
+    baseEl.current.style.top     = `${oy - RADIUS}px`;
+    baseEl.current.style.opacity = '1';
+    knobEl.current.style.transform = 'translate(0,0)';
+  }, []);
 
   const onTouchMove = useCallback((e) => {
     e.preventDefault();
     const s = stateRef.current;
     if (!s.active) return;
-    const t = [...e.changedTouches].find(tt => tt.identifier === s.id);
-    if (t) update(t.clientX, t.clientY);
-  }, [update]);
+    const touch = [...e.changedTouches].find(t => t.identifier === s.id);
+    if (touch) move(touch.clientX, touch.clientY);
+  }, [move]);
 
   const onTouchEnd = useCallback((e) => {
     e.preventDefault();
     stateRef.current.active = false;
-    if (knobRef.current) knobRef.current.style.transform = 'translate(0,0)';
+    baseEl.current.style.opacity = '0';
+    knobEl.current.style.transform = 'translate(0,0)';
     onChange(0, 0);
   }, [onChange]);
 
   return (
     <div
-      ref={baseRef}
-      className="joystick-base"
+      ref={areaRef}
+      className="joystick-area"
       onTouchStart={onTouchStart}
       onTouchMove={onTouchMove}
       onTouchEnd={onTouchEnd}
     >
-      <div ref={knobRef} className="joystick-knob" />
+      {/* база — скрыта пока не тапнули */}
+      <div ref={baseEl} className="joystick-base">
+        <div ref={knobEl} className="joystick-knob" />
+      </div>
     </div>
   );
 }
@@ -203,11 +204,9 @@ export default function ProjectWorld({ projects, onOpenProject }) {
   const onOpenRef    = useRef(onOpenProject);
   onOpenRef.current  = onOpenProject;
 
-  // touch joystick input shared with animation loop
   const touchInputRef = useRef({ x: 0, y: 0 });
-
   const handleJoystick = useCallback((x, y) => {
-    touchInputRef.current = { x, y: -y }; // invert Y: up on stick = up in world
+    touchInputRef.current = { x, y: -y };
   }, []);
 
   useEffect(() => {
@@ -239,6 +238,7 @@ export default function ProjectWorld({ projects, onOpenProject }) {
     scene.add(shipGroup);
     const planePos = new THREE.Vector3(0, 0, 0);
     const planeVel = new THREE.Vector3(0, 0, 0);
+    let   shipYaw  = 0; // текущий угол разворота (Y)
 
     const portals = projects.map((proj) => {
       const portal = makePortal(proj.color);
@@ -252,7 +252,6 @@ export default function ProjectWorld({ projects, onOpenProject }) {
       return { mesh: portal, project: proj };
     });
 
-    // keyboard
     const keys = {};
     const onKeyDown = (e) => {
       keys[e.code] = true;
@@ -262,8 +261,7 @@ export default function ProjectWorld({ projects, onOpenProject }) {
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup',   onKeyUp);
 
-    // animate
-    const clock  = new THREE.Clock();
+    const clock   = new THREE.Clock();
     const startMs = performance.now();
     let animId;
 
@@ -272,13 +270,11 @@ export default function ProjectWorld({ projects, onOpenProject }) {
       const dt = Math.min(clock.getDelta(), 0.05);
       const t  = (performance.now() - startMs) * 0.001;
 
-      // merge keyboard + joystick input
+      // input
       const kx = (keys['ArrowRight'] || keys['KeyD'] ? 1 : 0) - (keys['ArrowLeft'] || keys['KeyA'] ? 1 : 0);
       const ky = (keys['ArrowUp']    || keys['KeyW'] ? 1 : 0) - (keys['ArrowDown']  || keys['KeyS'] ? 1 : 0);
-      const tx = touchInputRef.current.x;
-      const ty = touchInputRef.current.y;
-      const inputX = Math.max(-1, Math.min(1, kx + tx));
-      const inputY = Math.max(-1, Math.min(1, ky + ty));
+      const inputX = Math.max(-1, Math.min(1, kx + touchInputRef.current.x));
+      const inputY = Math.max(-1, Math.min(1, ky + touchInputRef.current.y));
 
       planeVel.x += (inputX * SPEED - planeVel.x) * 0.14;
       planeVel.y += (inputY * SPEED - planeVel.y) * 0.14;
@@ -286,8 +282,21 @@ export default function ProjectWorld({ projects, onOpenProject }) {
       planePos.x += planeVel.x * dt;
       planePos.y  = Math.max(-3, Math.min(5.5, planePos.y + planeVel.y * dt));
 
+      // ── разворот: Y-ось следует за направлением движения ──
+      if (Math.abs(planeVel.x) > 0.4) {
+        const targetYaw = planeVel.x > 0 ? 0 : Math.PI;
+        let diff = targetYaw - shipYaw;
+        // кратчайший путь вокруг круга
+        if (diff >  Math.PI) diff -= Math.PI * 2;
+        if (diff < -Math.PI) diff += Math.PI * 2;
+        shipYaw += diff * 0.09;
+      }
+
       shipGroup.position.copy(planePos);
-      shipGroup.rotation.z = -planeVel.x * 0.045;
+      shipGroup.rotation.y = shipYaw;
+      // крен при наборе скорости
+      shipGroup.rotation.z = -Math.sin(shipYaw) * planeVel.x * 0.05;
+      // тангаж по вертикали
       shipGroup.rotation.x =  planeVel.y * 0.06;
 
       // engine glow
@@ -295,9 +304,11 @@ export default function ProjectWorld({ projects, onOpenProject }) {
       shipGroup.children.forEach((child) => {
         if (child.userData.isEngine) {
           const pulse = 0.5 + 0.5 * Math.sin(t * 12);
-          const r = thrust > 0.5 ? 1 : (0.7 + pulse * 0.3);
-          const g = (0.3 + pulse * 0.3);
-          child.material.color.setRGB(r, g, 0);
+          child.material.color.setRGB(
+            thrust > 0.5 ? 1 : 0.7 + pulse * 0.3,
+            0.3 + pulse * 0.3,
+            0
+          );
         }
       });
 
@@ -309,7 +320,6 @@ export default function ProjectWorld({ projects, onOpenProject }) {
       // portals
       let nearest = null;
       let nearestDist = TRIGGER_DIST;
-
       portals.forEach(({ mesh, project }) => {
         const dist = planePos.distanceTo(mesh.position);
         if (dist < nearestDist) { nearestDist = dist; nearest = project; }
@@ -362,7 +372,6 @@ export default function ProjectWorld({ projects, onOpenProject }) {
       </div>
 
       <div ref={containerRef} className="pw-canvas">
-        {/* near-portal prompt */}
         {nearProject && (
           <div className="pw-prompt" key={nearProject.id}>
             <span className="pw-prompt-name" style={{ color: nearProject.color }}>
@@ -379,8 +388,7 @@ export default function ProjectWorld({ projects, onOpenProject }) {
           </div>
         )}
 
-        {/* virtual joystick — shown on touch devices */}
-        <div className="pw-joystick-area">
+        <div className="pw-joystick-wrap">
           <Joystick onChange={handleJoystick} />
         </div>
 
