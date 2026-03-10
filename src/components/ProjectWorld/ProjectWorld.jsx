@@ -7,30 +7,72 @@ const SPEED = 6;
 
 // ─── builders ────────────────────────────────────────────────────────────────
 
-function makeVoxelPlane() {
+function makeVoxelSpaceship() {
   const group = new THREE.Group();
-  const blue  = new THREE.MeshBasicMaterial({ color: 0x00aaff });
-  const dark  = new THREE.MeshBasicMaterial({ color: 0x005588 });
-  const white = new THREE.MeshBasicMaterial({ color: 0xddeeff });
+  const hull    = new THREE.MeshBasicMaterial({ color: 0x0055aa });
+  const accent  = new THREE.MeshBasicMaterial({ color: 0x00ccff });
+  const wing    = new THREE.MeshBasicMaterial({ color: 0x003366 });
+  const cockpit = new THREE.MeshBasicMaterial({ color: 0xaaeeff });
+  const engine  = new THREE.MeshBasicMaterial({ color: 0xff6600 });
 
-  // fuselage
-  group.add(Object.assign(new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.3, 0.3), blue)));
-  // wings
-  const wings = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.08, 2.2), dark);
-  wings.position.set(-0.1, 0, 0);
-  group.add(wings);
-  // tail fin
-  const fin = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.38, 0.08), dark);
-  fin.position.set(-0.62, 0.2, 0);
-  group.add(fin);
-  // tail wings
-  const tail = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.07, 0.75), dark);
-  tail.position.set(-0.58, 0, 0);
-  group.add(tail);
-  // cockpit
-  const cockpit = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.26, 0.24), white);
-  cockpit.position.set(0.48, 0.1, 0);
-  group.add(cockpit);
+  // main body — flat & wide
+  group.add(new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.22, 0.52), hull));
+
+  // raised spine
+  const spine = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.16, 0.28), accent);
+  spine.position.set(0.1, 0.19, 0);
+  group.add(spine);
+
+  // cockpit bubble
+  const cpkt = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.2, 0.28), cockpit);
+  cpkt.position.set(0.7, 0.28, 0);
+  group.add(cpkt);
+
+  // nose tip
+  const nose = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.14, 0.22), accent);
+  nose.position.set(1.06, 0, 0);
+  group.add(nose);
+
+  // swept delta wings
+  [-1, 1].forEach((side) => {
+    const w1 = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.06, 0.55), wing);
+    w1.position.set(0.1, -0.02, side * 0.52);
+    w1.rotation.y = side * 0.22;
+    group.add(w1);
+
+    const w2 = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.05, 0.4), wing);
+    w2.position.set(-0.4, -0.02, side * 0.88);
+    w2.rotation.y = side * 0.35;
+    group.add(w2);
+
+    // wing tip fin
+    const tip = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.24, 0.1), accent);
+    tip.position.set(-0.65, 0.08, side * 1.1);
+    group.add(tip);
+
+    // engine pod
+    const pod = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.17, 0.17), hull);
+    pod.position.set(-0.85, 0, side * 0.3);
+    group.add(pod);
+
+    // engine exhaust glow — stored as userData for animation
+    const ex = new THREE.Mesh(
+      new THREE.BoxGeometry(0.13, 0.13, 0.13),
+      new THREE.MeshBasicMaterial({ color: 0xff6600 })
+    );
+    ex.position.set(-1.12, 0, side * 0.3);
+    ex.userData.isEngine = true;
+    group.add(ex);
+  });
+
+  // center engine
+  const exC = new THREE.Mesh(
+    new THREE.BoxGeometry(0.16, 0.1, 0.16),
+    new THREE.MeshBasicMaterial({ color: 0xff8800 })
+  );
+  exC.position.set(-1.08, 0, 0);
+  exC.userData.isEngine = true;
+  group.add(exC);
 
   return group;
 }
@@ -134,7 +176,7 @@ export default function ProjectWorld({ projects, onOpenProject }) {
     scene.add(grid);
 
     // player
-    const planeGroup = makeVoxelPlane();
+    const planeGroup = makeVoxelSpaceship();
     scene.add(planeGroup);
     const planePos = new THREE.Vector3(0, 0, 0);
     const planeVel = new THREE.Vector3(0, 0, 0);
@@ -189,6 +231,17 @@ export default function ProjectWorld({ projects, onOpenProject }) {
       planeGroup.position.copy(planePos);
       planeGroup.rotation.z = -planeVel.x * 0.045;
       planeGroup.rotation.x =  planeVel.y * 0.06;
+
+      // engine glow pulse
+      const thrust = Math.abs(planeVel.x) + Math.abs(planeVel.y);
+      planeGroup.children.forEach((child) => {
+        if (child.userData.isEngine) {
+          const pulse = 0.5 + 0.5 * Math.sin(t * 12);
+          const r = thrust > 0.5 ? Math.round(255) : Math.round(180 + pulse * 75);
+          const g = Math.round(80 + pulse * 80);
+          child.material.color.setRGB(r / 255, g / 255, 0);
+        }
+      });
 
       // camera follow
       camera.position.x += (planePos.x - camera.position.x) * 0.04;
