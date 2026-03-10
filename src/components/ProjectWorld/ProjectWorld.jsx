@@ -164,11 +164,6 @@ export default function ProjectWorld({ projects, onOpenProject }) {
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup',   onKeyUp);
 
-    // click on canvas → open nearest
-    const onCanvasClick = () => {
-      if (nearRef.current) onOpenRef.current(nearRef.current);
-    };
-    renderer.domElement.addEventListener('click', onCanvasClick);
 
     // animate
     const clock = new THREE.Clock();
@@ -243,7 +238,6 @@ export default function ProjectWorld({ projects, onOpenProject }) {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup',   onKeyUp);
       window.removeEventListener('resize',  onResize);
-      renderer.domElement.removeEventListener('click', onCanvasClick);
       if (container.contains(renderer.domElement)) container.removeChild(renderer.domElement);
       renderer.dispose();
     };
@@ -255,7 +249,7 @@ export default function ProjectWorld({ projects, onOpenProject }) {
         <span className="pw-tag">[ PROJECTS ]</span>
         <h2 className="pw-title">ПОЛЁТ К ПРОЕКТАМ</h2>
         <p className="pw-desc">
-          управляй самолётом · подлети к порталу · нажми <kbd>ENTER</kbd> или <kbd>CLICK</kbd>
+          управляй самолётом · подлети к порталу · нажми <kbd>ENTER</kbd>
         </p>
       </div>
 
@@ -265,7 +259,7 @@ export default function ProjectWorld({ projects, onOpenProject }) {
             <span className="pw-prompt-name" style={{ color: nearProject.color }}>
               {nearProject.title}
             </span>
-            <span className="pw-prompt-key">[ ENTER / CLICK ] открыть</span>
+            <span className="pw-prompt-key">[ ENTER ] открыть</span>
           </div>
         )}
         <div className="pw-controls">← → ↑ ↓ &nbsp;/&nbsp; WASD</div>
