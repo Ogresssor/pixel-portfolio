@@ -3,7 +3,16 @@ import * as THREE from 'three';
 import './ProjectWorld.css';
 
 const TRIGGER_DIST = 3.2;
-const SPEED = 6;
+const SPEED        = 6;
+const FLIP_DUR     = 0.55; // секунд на петлю
+const MAX_P        = 280;  // максимум частиц огня
+
+// цвет огня в зависимости от времени полёта
+function fireColor(timer) {
+  if (timer < 8)  return { r: 1, g: 0.25 + ((timer - 5) / 3) * 0.4, b: 0 };         // оранжевый
+  if (timer < 13) return { r: 1 - ((timer - 8) / 5) * 0.8, g: 0.75, b: ((timer - 8) / 5) * 1 }; // → голубой
+  return { r: 0.05, g: 0.45, b: 1 }; // синий форсаж
+}
 
 // ─── builders ────────────────────────────────────────────────────────────────
 
@@ -93,8 +102,7 @@ function makePortal(hexColor) {
 
 function makeTextSprite(text, hexColor) {
   const canvas = document.createElement('canvas');
-  canvas.width = 512;
-  canvas.height = 80;
+  canvas.width = 512; canvas.height = 80;
   const ctx = canvas.getContext('2d');
   ctx.clearRect(0, 0, 512, 80);
   ctx.font = '20px "Press Start 2P", "Courier New", monospace';
@@ -122,14 +130,13 @@ function makeStars(count = 1200) {
 }
 
 // ─── floating virtual joystick ───────────────────────────────────────────────
-// Невидимая зона — при тапе появляется там, где ткнул
 
 function Joystick({ onChange }) {
   const areaRef  = useRef(null);
   const baseEl   = useRef(null);
   const knobEl   = useRef(null);
   const stateRef = useRef({ active: false, id: null, ox: 0, oy: 0 });
-  const RADIUS   = 48; // px, половина базы
+  const RADIUS   = 48;
 
   const move = useCallback((tx, ty) => {
     const s = stateRef.current;
@@ -138,9 +145,8 @@ function Joystick({ onChange }) {
     const dist  = Math.hypot(dx, dy);
     const clamp = Math.min(dist, RADIUS);
     const angle = Math.atan2(dy, dx);
-    const kx    = Math.cos(angle) * clamp;
-    const ky    = Math.sin(angle) * clamp;
-
+    const kx = Math.cos(angle) * clamp;
+    const ky = Math.sin(angle) * clamp;
     knobEl.current.style.transform = `translate(${kx}px, ${ky}px)`;
     onChange(kx / RADIUS, ky / RADIUS);
   }, [onChange]);
@@ -150,13 +156,9 @@ function Joystick({ onChange }) {
     if (stateRef.current.active) return;
     const touch = e.changedTouches[0];
     const area  = areaRef.current.getBoundingClientRect();
-
-    // origin = точка касания относительно области
     const ox = touch.clientX - area.left;
     const oy = touch.clientY - area.top;
     stateRef.current = { active: true, id: touch.identifier, ox: touch.clientX, oy: touch.clientY };
-
-    // показываем базу там где ткнули
     baseEl.current.style.left    = `${ox - RADIUS}px`;
     baseEl.current.style.top     = `${oy - RADIUS}px`;
     baseEl.current.style.opacity = '1';
@@ -187,7 +189,6 @@ function Joystick({ onChange }) {
       onTouchMove={onTouchMove}
       onTouchEnd={onTouchEnd}
     >
-      {/* база — скрыта пока не тапнули */}
       <div ref={baseEl} className="joystick-base">
         <div ref={knobEl} className="joystick-knob" />
       </div>
@@ -200,11 +201,11 @@ function Joystick({ onChange }) {
 export default function ProjectWorld({ projects, onOpenProject }) {
   const containerRef = useRef(null);
   const [nearProject, setNearProject] = useState(null);
-  const nearRef      = useRef(null);
-  const onOpenRef    = useRef(onOpenProject);
-  onOpenRef.current  = onOpenProject;
+  const nearRef     = useRef(null);
+  const onOpenRef   = useRef(onOpenProject);
+  onOpenRef.current = onOpenProject;
 
-  const touchInputRef = useRef({ x: 0, y: 0 });
+  const touchInputRef  = useRef({ x: 0, y: 0 });
   const handleJoystick = useCallback((x, y) => {
     touchInputRef.current = { x, y: -y };
   }, []);
@@ -234,24 +235,58 @@ export default function ProjectWorld({ projects, onOpenProject }) {
     grid.position.y = -5;
     scene.add(grid);
 
+    // ── корабль ──
     const shipGroup = makeVoxelSpaceship();
     scene.add(shipGroup);
     const planePos = new THREE.Vector3(0, 0, 0);
     const planeVel = new THREE.Vector3(0, 0, 0);
-    let   shipYaw  = 0; // текущий угол разворота (Y)
+    let   shipYaw  = 0;
 
+    // ── мёртвая петля ──
+    // flip: { t, dir: ±1, yawFlipped }
+    let flip = null;
+
+    // ── огненный шлейф (частицы) ──
+    const pPosBuf = new Float32Array(MAX_P * 3);
+    const pColBuf = new Float32Array(MAX_P * 3);
+    const pGeo    = new THREE.BufferGeometry();
+    const pAttrPos = new THREE.BufferAttribute(pPosBuf, 3);
+    const pAttrCol = new THREE.BufferAttribute(pColBuf, 3);
+    pAttrPos.setUsage(THREE.DynamicDrawUsage);
+    pAttrCol.setUsage(THREE.DynamicDrawUsage);
+    pGeo.setAttribute('position', pAttrPos);
+    pGeo.setAttribute('color',    pAttrCol);
+    pGeo.setDrawRange(0, 0);
+    const pMat = new THREE.PointsMaterial({
+      size: 0.5, vertexColors: true,
+      transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
+    });
+    const pSystem = new THREE.Points(pGeo, pMat);
+    scene.add(pSystem);
+
+    // массив живых частиц
+    const ptcls = []; // { x,y,z, vx,vy, life, maxLife, r,g,b }
+    let flyTimer = 0;
+
+    // позиции сопел в локальных координатах корабля
+    const nozzles = [
+      new THREE.Vector3(-1.12, 0,  0.3),
+      new THREE.Vector3(-1.12, 0, -0.3),
+      new THREE.Vector3(-1.08, 0,  0),
+    ];
+
+    // ── порталы ──
     const portals = projects.map((proj) => {
       const portal = makePortal(proj.color);
       portal.position.set(proj.x ?? 0, proj.y ?? 0, 0);
       scene.add(portal);
-
       const label = makeTextSprite(proj.title, proj.color);
       label.position.set(proj.x ?? 0, (proj.y ?? 0) + 1.75, 0.1);
       scene.add(label);
-
       return { mesh: portal, project: proj };
     });
 
+    // ── ввод ──
     const keys = {};
     const onKeyDown = (e) => {
       keys[e.code] = true;
@@ -270,40 +305,76 @@ export default function ProjectWorld({ projects, onOpenProject }) {
       const dt = Math.min(clock.getDelta(), 0.05);
       const t  = (performance.now() - startMs) * 0.001;
 
-      // input
+      // ── input ──
       const kx = (keys['ArrowRight'] || keys['KeyD'] ? 1 : 0) - (keys['ArrowLeft'] || keys['KeyA'] ? 1 : 0);
       const ky = (keys['ArrowUp']    || keys['KeyW'] ? 1 : 0) - (keys['ArrowDown']  || keys['KeyS'] ? 1 : 0);
       const inputX = Math.max(-1, Math.min(1, kx + touchInputRef.current.x));
       const inputY = Math.max(-1, Math.min(1, ky + touchInputRef.current.y));
 
+      // ── определяем момент разворота и запускаем петлю ──
+      if (!flip) {
+        const goRight = planeVel.x >  2;
+        const goLeft  = planeVel.x < -2;
+        if ((goRight && inputX < -0.5) || (goLeft && inputX > 0.5)) {
+          flip = { t: 0, dir: goRight ? 1 : -1, yawFlipped: false };
+        }
+      }
+
+      // ── физика ──
       planeVel.x += (inputX * SPEED - planeVel.x) * 0.14;
       planeVel.y += (inputY * SPEED - planeVel.y) * 0.14;
-
       planePos.x += planeVel.x * dt;
       planePos.y  = Math.max(-3, Math.min(5.5, planePos.y + planeVel.y * dt));
 
-      // ── разворот: Y-ось следует за направлением движения ──
-      if (Math.abs(planeVel.x) > 0.4) {
-        const targetYaw = planeVel.x > 0 ? 0 : Math.PI;
-        let diff = targetYaw - shipYaw;
-        // кратчайший путь вокруг круга
-        if (diff >  Math.PI) diff -= Math.PI * 2;
-        if (diff < -Math.PI) diff += Math.PI * 2;
-        shipYaw += diff * 0.09;
+      // ── вращение корабля ──
+      if (flip) {
+        flip.t += dt;
+        const progress = flip.t / FLIP_DUR;
+
+        // мёртвая петля: полный оборот по Z (видна из камеры как петля)
+        shipGroup.rotation.z = flip.dir * progress * Math.PI * 2;
+        // небольшая дуга вверх в апогее
+        planePos.y += Math.sin(Math.min(progress, 1) * Math.PI) * 3.5 * dt;
+
+        // разворот yaw в середине петли
+        if (!flip.yawFlipped && progress >= 0.5) {
+          shipYaw = (shipYaw > Math.PI * 0.5) ? 0 : Math.PI;
+          flip.yawFlipped = true;
+        }
+
+        // тангаж по вертикали остаётся
+        shipGroup.rotation.x = planeVel.y * 0.04;
+        shipGroup.rotation.y = shipYaw;
+
+        if (flip.t >= FLIP_DUR) flip = null;
+      } else {
+        // нормальный разворот следует за скоростью
+        if (Math.abs(planeVel.x) > 0.4) {
+          const targetYaw = planeVel.x > 0 ? 0 : Math.PI;
+          let diff = targetYaw - shipYaw;
+          if (diff >  Math.PI) diff -= Math.PI * 2;
+          if (diff < -Math.PI) diff += Math.PI * 2;
+          shipYaw += diff * 0.09;
+        }
+        shipGroup.rotation.y = shipYaw;
+        shipGroup.rotation.z = -Math.sin(shipYaw) * planeVel.x * 0.05;
+        shipGroup.rotation.x =  planeVel.y * 0.06;
       }
 
       shipGroup.position.copy(planePos);
-      shipGroup.rotation.y = shipYaw;
-      // крен при наборе скорости
-      shipGroup.rotation.z = -Math.sin(shipYaw) * planeVel.x * 0.05;
-      // тангаж по вертикали
-      shipGroup.rotation.x =  planeVel.y * 0.06;
 
-      // engine glow
+      // ── пульс двигателей ──
       const thrust = Math.abs(planeVel.x) + Math.abs(planeVel.y);
+      const pulse  = 0.5 + 0.5 * Math.sin(t * 12);
       shipGroup.children.forEach((child) => {
-        if (child.userData.isEngine) {
-          const pulse = 0.5 + 0.5 * Math.sin(t * 12);
+        if (!child.userData.isEngine) return;
+        if (flyTimer > 12) {
+          // форсаж — синий
+          child.material.color.setRGB(0.05, 0.4 + pulse * 0.3, 1);
+        } else if (flyTimer > 8) {
+          const k = (flyTimer - 8) / 4;
+          child.material.color.setRGB(1 - k * 0.9, 0.7, k);
+        } else {
           child.material.color.setRGB(
             thrust > 0.5 ? 1 : 0.7 + pulse * 0.3,
             0.3 + pulse * 0.3,
@@ -312,18 +383,69 @@ export default function ProjectWorld({ projects, onOpenProject }) {
         }
       });
 
-      // camera follow
+      // ── таймер полёта ──
+      if (thrust > 0.8) flyTimer += dt;
+      else              flyTimer = Math.max(0, flyTimer - dt * 0.4);
+
+      // ── огненный шлейф ──
+      // Обновляем живые частицы
+      for (let i = ptcls.length - 1; i >= 0; i--) {
+        const p = ptcls[i];
+        p.life -= dt / p.maxLife;
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        if (p.life <= 0) ptcls.splice(i, 1);
+      }
+
+      // Спавним новые
+      if (flyTimer >= 5 && thrust > 0.8 && ptcls.length < MAX_P) {
+        const fc = fireColor(flyTimer);
+        const spawnCount = flyTimer > 10 ? 5 : 3;
+        for (let si = 0; si < spawnCount; si++) {
+          const nozzle = nozzles[si % 3].clone();
+          shipGroup.localToWorld(nozzle);
+          const backDir = Math.cos(shipYaw + Math.PI);
+          const sideDir = Math.sin(shipYaw + Math.PI);
+          ptcls.push({
+            x: nozzle.x, y: nozzle.y, z: nozzle.z,
+            vx: backDir * (2.5 + Math.random()) + (Math.random() - 0.5) * 0.6,
+            vy: sideDir * (2.5 + Math.random()) * 0.1 + (Math.random() - 0.5) * 0.8,
+            life: 1,
+            maxLife: 0.2 + Math.random() * 0.3,
+            r: fc.r, g: fc.g, b: fc.b,
+          });
+        }
+      }
+
+      // Заливаем буфер
+      let pCount = 0;
+      for (const p of ptcls) {
+        if (pCount >= MAX_P) break;
+        const i3 = pCount * 3;
+        pPosBuf[i3]     = p.x;
+        pPosBuf[i3 + 1] = p.y;
+        pPosBuf[i3 + 2] = p.z;
+        const a = Math.max(0, p.life);
+        pColBuf[i3]     = p.r * a;
+        pColBuf[i3 + 1] = p.g * a;
+        pColBuf[i3 + 2] = p.b * a;
+        pCount++;
+      }
+      pGeo.setDrawRange(0, pCount);
+      pAttrPos.needsUpdate = true;
+      pAttrCol.needsUpdate = true;
+
+      // ── камера ──
       camera.position.x += (planePos.x - camera.position.x) * 0.04;
       camera.position.y += (planePos.y + 1.2 - camera.position.y) * 0.04;
       camera.lookAt(planePos.x, planePos.y, 0);
 
-      // portals
+      // ── порталы ──
       let nearest = null;
       let nearestDist = TRIGGER_DIST;
       portals.forEach(({ mesh, project }) => {
         const dist = planePos.distanceTo(mesh.position);
         if (dist < nearestDist) { nearestDist = dist; nearest = project; }
-
         const panel = mesh.children[1];
         if (panel) {
           panel.material.opacity = dist < TRIGGER_DIST
@@ -356,6 +478,7 @@ export default function ProjectWorld({ projects, onOpenProject }) {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup',   onKeyUp);
       window.removeEventListener('resize',  onResize);
+      pGeo.dispose(); pMat.dispose();
       if (container.contains(renderer.domElement)) container.removeChild(renderer.domElement);
       renderer.dispose();
     };
@@ -366,9 +489,7 @@ export default function ProjectWorld({ projects, onOpenProject }) {
       <div className="pw-header">
         <span className="pw-tag">[ PROJECTS ]</span>
         <h2 className="pw-title">ПОЛЁТ К ПРОЕКТАМ</h2>
-        <p className="pw-desc">
-          подлети к порталу и нажми <kbd>ENTER</kbd>
-        </p>
+        <p className="pw-desc">подлети к порталу и нажми <kbd>ENTER</kbd></p>
       </div>
 
       <div ref={containerRef} className="pw-canvas">
