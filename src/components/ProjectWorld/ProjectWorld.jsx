@@ -2,10 +2,13 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
 import './ProjectWorld.css';
 
-const TRIGGER_DIST = 3.2;
-const SPEED        = 6;
-const FLIP_DUR     = 0.55; // секунд на петлю
-const MAX_P        = 280;  // максимум частиц огня
+const TRIGGER_DIST  = 3.2;
+const SPEED         = 6;
+const MAX_P         = 280;   // максимум частиц огня
+const BOSS_X        = 26;    // позиция босса по X (после проекта 3 на x:13)
+const BUILDING_HP   = 6;     // попаданий на каждое здание
+const BULLET_SPEED  = 22;
+const BULLET_MAX    = 20;
 
 // цвет огня в зависимости от времени полёта
 function fireColor(timer) {
@@ -117,6 +120,78 @@ function makeTextSprite(text, hexColor) {
   return sprite;
 }
 
+function makeSkyscraper(side) {
+  const group = new THREE.Group();
+  const mat1 = new THREE.MeshBasicMaterial({ color: 0x1a0a00 });
+  const mat2 = new THREE.MeshBasicMaterial({ color: 0xff3300 });
+  const matGlow = new THREE.MeshBasicMaterial({ color: 0xff6600, transparent: true, opacity: 0.6 });
+
+  // основная башня
+  const body = new THREE.Mesh(new THREE.BoxGeometry(2.2, 14, 2.2), mat1);
+  body.position.y = 7;
+  group.add(body);
+
+  // верхняя секция уже
+  const top = new THREE.Mesh(new THREE.BoxGeometry(1.4, 5, 1.4), mat1);
+  top.position.y = 16.5;
+  group.add(top);
+
+  // шпиль
+  const spire = new THREE.Mesh(new THREE.BoxGeometry(0.3, 4, 0.3), mat2);
+  spire.position.y = 21;
+  group.add(spire);
+
+  // рёбра каркаса (EdgesGeometry для каждой секции)
+  const edgeMat = new THREE.LineBasicMaterial({ color: 0xff3300 });
+  const edgesBody = new THREE.EdgesGeometry(new THREE.BoxGeometry(2.2, 14, 2.2));
+  const edgesBodyLine = new THREE.LineSegments(edgesBody, edgeMat);
+  edgesBodyLine.position.y = 7;
+  group.add(edgesBodyLine);
+
+  const edgesTop = new THREE.EdgesGeometry(new THREE.BoxGeometry(1.4, 5, 1.4));
+  const edgesTopLine = new THREE.LineSegments(edgesTop, edgeMat);
+  edgesTopLine.position.y = 16.5;
+  group.add(edgesTopLine);
+
+  // окна (светящиеся блоки)
+  for (let row = 1; row <= 6; row++) {
+    for (let col = -1; col <= 1; col++) {
+      const win = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.25, 0.05), matGlow);
+      win.position.set(col * 0.7, row * 1.8, 1.13);
+      group.add(win);
+    }
+  }
+
+  // антенны-огни
+  const light = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.18, 0.18), mat2);
+  light.position.y = 23.3;
+  light.userData.isAntenna = true;
+  group.add(light);
+
+  // позиционируем по стороне
+  group.position.set(BOSS_X, -5, side * 3.5);
+  return group;
+}
+
+function makeDebris(x, y, z) {
+  const group = new THREE.Group();
+  const colors = [0xff3300, 0x1a0a00, 0xff6600, 0x330000];
+  for (let i = 0; i < 18; i++) {
+    const s = 0.2 + Math.random() * 0.6;
+    const m = new THREE.Mesh(
+      new THREE.BoxGeometry(s, s, s),
+      new THREE.MeshBasicMaterial({ color: colors[Math.floor(Math.random() * colors.length)] })
+    );
+    m.position.set(x + (Math.random() - 0.5) * 2, y + Math.random() * 8, z + (Math.random() - 0.5) * 2);
+    m.userData.vx = (Math.random() - 0.5) * 5;
+    m.userData.vy = 2 + Math.random() * 6;
+    m.userData.vz = (Math.random() - 0.5) * 3;
+    m.userData.life = 1;
+    group.add(m);
+  }
+  return group;
+}
+
 function makeStars(count = 1200) {
   const pos = new Float32Array(count * 3);
   for (let i = 0; i < count; i++) {
@@ -200,9 +275,10 @@ function Joystick({ onChange }) {
 
 export default function ProjectWorld({ projects, onOpenProject }) {
   const containerRef = useRef(null);
-  const [nearProject, setNearProject] = useState(null);
-  const nearRef     = useRef(null);
-  const onOpenRef   = useRef(onOpenProject);
+  const [nearProject,  setNearProject]  = useState(null);
+  const [bossState,    setBossState]    = useState(null); // null | { hp1, hp2, dead1, dead2, cleared }
+  const nearRef    = useRef(null);
+  const onOpenRef  = useRef(onOpenProject);
   onOpenRef.current = onOpenProject;
 
   const touchInputRef  = useRef({ x: 0, y: 0 });
@@ -240,11 +316,23 @@ export default function ProjectWorld({ projects, onOpenProject }) {
     scene.add(shipGroup);
     const planePos = new THREE.Vector3(0, 0, 0);
     const planeVel = new THREE.Vector3(0, 0, 0);
-    let   shipYaw  = 0;
+    let shipYaw   = 0;
+    let bankAngle = 0; // крен при повороте
 
-    // ── мёртвая петля ──
-    // flip: { t, dir: ±1, yawFlipped }
-    let flip = null;
+    // ── босс ──
+    const building1 = makeSkyscraper(-1);
+    const building2 = makeSkyscraper( 1);
+    scene.add(building1);
+    scene.add(building2);
+    const bossHP = { hp1: BUILDING_HP, hp2: BUILDING_HP, dead1: false, dead2: false, cleared: false };
+    const debrisGroups = [];
+    setBossState({ hp1: BUILDING_HP, hp2: BUILDING_HP, dead1: false, dead2: false, cleared: false });
+
+    // ── пули ──
+    const bullets = []; // { mesh, vx, vy, life }
+    const bulletGeo = new THREE.BoxGeometry(0.18, 0.08, 0.08);
+    const bulletMat = new THREE.MeshBasicMaterial({ color: 0x00ffff });
+    let   shootCooldown = 0;
 
     // ── огненный шлейф (частицы) ──
     const pPosBuf = new Float32Array(MAX_P * 3);
@@ -293,6 +381,7 @@ export default function ProjectWorld({ projects, onOpenProject }) {
       if (e.code === 'Enter' && nearRef.current) onOpenRef.current(nearRef.current);
     };
     const onKeyUp = (e) => { keys[e.code] = false; };
+    // Space стреляет — обрабатывается в animate через keys['Space']
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup',   onKeyUp);
 
@@ -305,20 +394,11 @@ export default function ProjectWorld({ projects, onOpenProject }) {
       const dt = Math.min(clock.getDelta(), 0.05);
       const t  = (performance.now() - startMs) * 0.001;
 
-      // ── input ──
-      const kx = (keys['ArrowRight'] || keys['KeyD'] ? 1 : 0) - (keys['ArrowLeft'] || keys['KeyA'] ? 1 : 0);
-      const ky = (keys['ArrowUp']    || keys['KeyW'] ? 1 : 0) - (keys['ArrowDown']  || keys['KeyS'] ? 1 : 0);
+      // ── input (только WASD + джойстик) ──
+      const kx = (keys['KeyD'] ? 1 : 0) - (keys['KeyA'] ? 1 : 0);
+      const ky = (keys['KeyW'] ? 1 : 0) - (keys['KeyS'] ? 1 : 0);
       const inputX = Math.max(-1, Math.min(1, kx + touchInputRef.current.x));
       const inputY = Math.max(-1, Math.min(1, ky + touchInputRef.current.y));
-
-      // ── определяем момент разворота и запускаем петлю ──
-      if (!flip) {
-        const goRight = planeVel.x >  2;
-        const goLeft  = planeVel.x < -2;
-        if ((goRight && inputX < -0.5) || (goLeft && inputX > 0.5)) {
-          flip = { t: 0, dir: goRight ? 1 : -1, yawFlipped: false };
-        }
-      }
 
       // ── физика ──
       planeVel.x += (inputX * SPEED - planeVel.x) * 0.14;
@@ -326,40 +406,21 @@ export default function ProjectWorld({ projects, onOpenProject }) {
       planePos.x += planeVel.x * dt;
       planePos.y  = Math.max(-3, Math.min(5.5, planePos.y + planeVel.y * dt));
 
-      // ── вращение корабля ──
-      if (flip) {
-        flip.t += dt;
-        const progress = flip.t / FLIP_DUR;
-
-        // мёртвая петля: полный оборот по Z (видна из камеры как петля)
-        shipGroup.rotation.z = flip.dir * progress * Math.PI * 2;
-        // небольшая дуга вверх в апогее
-        planePos.y += Math.sin(Math.min(progress, 1) * Math.PI) * 3.5 * dt;
-
-        // разворот yaw в середине петли
-        if (!flip.yawFlipped && progress >= 0.5) {
-          shipYaw = (shipYaw > Math.PI * 0.5) ? 0 : Math.PI;
-          flip.yawFlipped = true;
-        }
-
-        // тангаж по вертикали остаётся
-        shipGroup.rotation.x = planeVel.y * 0.04;
-        shipGroup.rotation.y = shipYaw;
-
-        if (flip.t >= FLIP_DUR) flip = null;
-      } else {
-        // нормальный разворот следует за скоростью
-        if (Math.abs(planeVel.x) > 0.4) {
-          const targetYaw = planeVel.x > 0 ? 0 : Math.PI;
-          let diff = targetYaw - shipYaw;
-          if (diff >  Math.PI) diff -= Math.PI * 2;
-          if (diff < -Math.PI) diff += Math.PI * 2;
-          shipYaw += diff * 0.09;
-        }
-        shipGroup.rotation.y = shipYaw;
-        shipGroup.rotation.z = -Math.sin(shipYaw) * planeVel.x * 0.05;
-        shipGroup.rotation.x =  planeVel.y * 0.06;
+      // ── плавный разворот с креном ──
+      if (Math.abs(planeVel.x) > 0.3) {
+        const targetYaw = planeVel.x > 0 ? 0 : Math.PI;
+        let diff = targetYaw - shipYaw;
+        if (diff >  Math.PI) diff -= Math.PI * 2;
+        if (diff < -Math.PI) diff += Math.PI * 2;
+        shipYaw += diff * 0.12;
       }
+      // крен: наклоняемся в сторону поворота при быстрой смене
+      const targetBank = -inputX * 0.55;
+      bankAngle += (targetBank - bankAngle) * 0.1;
+
+      shipGroup.rotation.y = shipYaw;
+      shipGroup.rotation.z = bankAngle;
+      shipGroup.rotation.x = planeVel.y * 0.055;
 
       shipGroup.position.copy(planePos);
 
@@ -386,6 +447,77 @@ export default function ProjectWorld({ projects, onOpenProject }) {
       // ── таймер полёта ──
       if (thrust > 0.8) flyTimer += dt;
       else              flyTimer = Math.max(0, flyTimer - dt * 0.4);
+
+      // ── стрельба (Space) ──
+      shootCooldown = Math.max(0, shootCooldown - dt);
+      if (keys['Space'] && shootCooldown <= 0 && bullets.length < BULLET_MAX) {
+        const b = new THREE.Mesh(bulletGeo, bulletMat.clone());
+        b.position.copy(planePos);
+        b.position.x += Math.cos(shipYaw) * 1.2;
+        const dir = Math.cos(shipYaw) > 0 ? 1 : -1;
+        b.userData.vx = dir * BULLET_SPEED;
+        b.userData.life = 1.2;
+        scene.add(b);
+        bullets.push(b);
+        shootCooldown = 0.18;
+      }
+
+      // ── обновляем пули ──
+      for (let i = bullets.length - 1; i >= 0; i--) {
+        const b = bullets[i];
+        b.userData.life -= dt;
+        b.position.x += b.userData.vx * dt;
+        if (b.userData.life <= 0) {
+          scene.remove(b);
+          bullets.splice(i, 1);
+          continue;
+        }
+        // проверяем попадание в небоскрёбы
+        const checkBuilding = (building, hpKey, deadKey) => {
+          if (bossHP[deadKey]) return;
+          const dx = Math.abs(b.position.x - building.position.x);
+          const dy = b.position.y - building.position.y;
+          const dz = Math.abs(b.position.z - building.position.z);
+          if (dx < 2.0 && dy > -1 && dy < 20 && dz < 2.0) {
+            bossHP[hpKey]--;
+            scene.remove(b);
+            bullets.splice(i, 1);
+            if (bossHP[hpKey] <= 0) {
+              bossHP[deadKey] = true;
+              scene.remove(building);
+              // взрыв обломков
+              const dg = makeDebris(building.position.x, building.position.y + 8, building.position.z);
+              scene.add(dg);
+              debrisGroups.push(dg);
+              if (bossHP.dead1 && bossHP.dead2) bossHP.cleared = true;
+            }
+            setBossState({ ...bossHP });
+          }
+        };
+        checkBuilding(building1, 'hp1', 'dead1');
+        if (bullets[i]) checkBuilding(building2, 'hp2', 'dead2');
+      }
+
+      // ── анимация обломков ──
+      for (const dg of debrisGroups) {
+        dg.children.forEach((m) => {
+          m.userData.vy -= 9 * dt;
+          m.position.x += m.userData.vx * dt;
+          m.position.y += m.userData.vy * dt;
+          m.position.z += m.userData.vz * dt;
+          m.userData.life = Math.max(0, m.userData.life - dt * 0.4);
+          if (m.material) m.material.opacity = m.userData.life;
+        });
+      }
+
+      // ── мигание антенн зданий ──
+      [building1, building2].forEach((b) => {
+        b.children.forEach((c) => {
+          if (c.userData.isAntenna) {
+            c.material.color.setHex(Math.sin(t * 5) > 0 ? 0xff3300 : 0x330000);
+          }
+        });
+      });
 
       // ── огненный шлейф ──
       // Обновляем живые частицы
@@ -478,7 +610,9 @@ export default function ProjectWorld({ projects, onOpenProject }) {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup',   onKeyUp);
       window.removeEventListener('resize',  onResize);
+      bullets.forEach((b) => scene.remove(b));
       pGeo.dispose(); pMat.dispose();
+      bulletGeo.dispose(); bulletMat.dispose();
       if (container.contains(renderer.domElement)) container.removeChild(renderer.domElement);
       renderer.dispose();
     };
@@ -509,11 +643,38 @@ export default function ProjectWorld({ projects, onOpenProject }) {
           </div>
         )}
 
+        {bossState && !bossState.cleared && (
+          <div className="pw-boss-hud">
+            <div className="pw-boss-label">⚠ УНИЧТОЖЬ НЕБОСКРЁБЫ ⚠</div>
+            <div className="pw-boss-hint">ПРОБЕЛ — стрельба</div>
+            <div className="pw-boss-bars">
+              {[{ label: 'БАШНЯ A', hp: bossState.hp1, dead: bossState.dead1 },
+                { label: 'БАШНЯ B', hp: bossState.hp2, dead: bossState.dead2 }].map(({ label, hp, dead }) => (
+                <div className="pw-boss-bar-wrap" key={label}>
+                  <div className="pw-boss-bar-label">{dead ? '[ РАЗРУШЕНА ]' : label}</div>
+                  <div className="pw-boss-bar-bg">
+                    <div
+                      className="pw-boss-bar-fill"
+                      style={{ width: dead ? '0%' : `${(hp / BUILDING_HP) * 100}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {bossState?.cleared && (
+          <div className="pw-boss-hud">
+            <div className="pw-boss-dead">✓ ПУТЬ ОТКРЫТ!</div>
+          </div>
+        )}
+
         <div className="pw-joystick-wrap">
           <Joystick onChange={handleJoystick} />
         </div>
 
-        <div className="pw-controls">← → ↑ ↓ / WASD</div>
+        <div className="pw-controls">WASD — движение &nbsp; SPACE — огонь</div>
       </div>
     </section>
   );

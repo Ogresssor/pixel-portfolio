@@ -108,13 +108,21 @@
 /* controls hint — hidden on mobile */
 .pw-controls {
   position: absolute;
-  bottom: 16px;
-  right: 20px;
-  font-size: 7px;
-  color: var(--text-dim);
-  letter-spacing: 2px;
+  bottom: 20px;
+  right: 24px;
+  font-size: 14px;
+  color: #ffdd00;
+  letter-spacing: 3px;
   z-index: 10;
   pointer-events: none;
+  text-shadow: 0 0 10px #ffdd00, 0 0 22px #ffaa00;
+  animation: hintPulse 1.6s ease-in-out infinite;
+  transform-origin: right bottom;
+}
+
+@keyframes hintPulse {
+  0%, 100% { opacity: 1;   transform: scale(1); }
+  50%       { opacity: 0.2; transform: scale(1.22); }
 }
 
 @media (hover: none) and (pointer: coarse) {
@@ -167,4 +175,79 @@
   border: 1px solid rgba(0, 204, 255, 0.7);
   pointer-events: none;
   box-shadow: 0 0 10px rgba(0, 204, 255, 0.4);
+}
+
+/* ── boss HUD ── */
+.pw-boss-hud {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  pointer-events: none;
+  animation: promptIn 0.3s ease;
+}
+
+.pw-boss-label {
+  font-family: var(--font-pixel);
+  font-size: 10px;
+  color: #ff4400;
+  letter-spacing: 3px;
+  text-shadow: 0 0 12px #ff4400;
+  animation: hintPulse 0.8s ease-in-out infinite;
+}
+
+.pw-boss-bars {
+  display: flex;
+  gap: 10px;
+}
+
+.pw-boss-bar-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+
+.pw-boss-bar-label {
+  font-family: var(--font-pixel);
+  font-size: 7px;
+  color: #ff6600;
+  letter-spacing: 1px;
+}
+
+.pw-boss-bar-bg {
+  width: 100px;
+  height: 8px;
+  background: rgba(255,60,0,0.15);
+  border: 1px solid #ff4400;
+}
+
+.pw-boss-bar-fill {
+  height: 100%;
+  background: #ff4400;
+  box-shadow: 0 0 6px #ff4400;
+  transition: width 0.15s ease;
+}
+
+.pw-boss-dead {
+  font-family: var(--font-pixel);
+  font-size: 13px;
+  color: #00ff88;
+  letter-spacing: 3px;
+  text-shadow: 0 0 16px #00ff88;
+  animation: promptIn 0.3s ease;
+}
+
+.pw-boss-hint {
+  font-family: var(--font-pixel);
+  font-size: 9px;
+  color: #ffaa00;
+  letter-spacing: 2px;
+  text-shadow: 0 0 8px #ffaa00;
+  animation: hintPulse 1.2s ease-in-out infinite;
 }
